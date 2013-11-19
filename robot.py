@@ -4,6 +4,7 @@ import random
 _game = None
 _myPlayerId = None
 _gameView = None
+_potentialMovesByOtherRobots = None
 
 def sub2d(loc1, loc2):
 	return (loc1[0] - loc2[0], loc1[1] - loc2[1])
@@ -11,18 +12,30 @@ def sub2d(loc1, loc2):
 def wdist2d(loc1, loc2):
 	return (abs(loc1[0] - loc2[0]), abs(loc1[1] - loc2[1]))
 
+def getEstimatedLocationsOfMorePrivilegedRobots(current_loc):
+	if _potentialMovesByOtherRobots is None:
+		return []
+	morePrivilegedRobots = filter(lambda move: move["robot"]["location"] < current_loc, _potentialMovesByOtherRobots)
+	robotsMoving = filter(lambda move: move["move"].getBasicMove()[0] == "move", morePrivilegedRobots)
+	locations = map(lambda move: move["move"].getBasicMove()[1], robotsMoving)
+	return locations
+
 def towardFilteredOrCurrent(current_loc, dest_loc):
 	filter_out = ['invalid']
 	if not 'spawn' in rg.loc_types(current_loc):
 		filter_out.append('spawn')
-	
-	goableLocations = filter(lambda loc: filter(lambda l: l == loc, _game['robots'].keys()) == [], rg.locs_around(current_loc, filter_out))
+
+	currentPositionsOfOthers = _game['robots'].keys()
+	estimatedFuturePositionsOfOthers = getEstimatedLocationsOfMorePrivilegedRobots(current_loc)
+	forbiddenLocations = currentPositionsOfOthers + estimatedFuturePositionsOfOthers
+		
+	goableLocations = filter(lambda loc: filter(lambda l: l == loc, forbiddenLocations) == [], rg.locs_around(current_loc, filter_out))
 	if goableLocations == []:
 		return current_loc
 
 	loc_dist = [{"location": loc, "distance": rg.wdist(loc, dest_loc)} for loc in goableLocations]
 	loc_dist = sorted(loc_dist, key=lambda x: (x["distance"], max(wdist2d(x["location"], dest_loc))))
-	print loc_dist
+	# print loc_dist
 	return loc_dist[0]["location"]
 
 def enemyAtLoc(location):
@@ -82,7 +95,7 @@ class GameView:
 			enemy = min(self.enemies, key=lambda r: (r['numAttacking'] / 50, rg.wdist(myLoc, r['location'])))
 			self.targets[myRobot['location']] = enemy['robot']
 			enemy['numAttacking'] += 1
-		print self.targets
+		#print self.targets
 
 class Walker:
 	def __init__(self, me):
@@ -152,37 +165,27 @@ class InternalRobot:
 		self.location = location
 		self.hp = hp
 
-def possiblyFixMove(me, move):
-	basicMove = move.getBasicMove()
-	if basicMove[0] != "move":
-		return move
-
+def estimateMovesOfOtherRobots(me):
 	myOtherRobots = map(lambda (loc, robot): robot, filter(lambda (loc, robot): loc != me.location, _gameView.myRobots))
 	movesOfMyOtherRobots = map(lambda robot: {"robot": robot, "move": calculateMove(InternalRobot(robot["location"], robot["hp"]))}, myOtherRobots)
-
-	for otherMove in movesOfMyOtherRobots:
-		basicOtherMove = otherMove["move"].getBasicMove()
-		if basicOtherMove[0] != "move":
-			continue
-		if basicOtherMove[1] != basicMove[1]:
-			continue
-		if otherMove["robot"]["location"] >= me.location:
-			return Move(['guard'], "possiblyFixMoveOverridden [%s]" % move.getWhy())
-	return move
+	return movesOfMyOtherRobots
 
 class Robot:
 		def act(self, game):
 			global _game
 			global _myPlayerId
 			global _gameView
+			global _potentialMovesByOtherRobots
+
 			_game = game
 			_myPlayerId = self.player_id
 
 			_gameView = GameView(game)
 			_gameView.calculateTargets()
+			
+			_potentialMovesByOtherRobots = estimateMovesOfOtherRobots(self)
 
 			move = calculateMove(self)
-			move = possiblyFixMove(self, move)	
 
 			why = move.getWhy()
 			basicMove = move.getBasicMove()
