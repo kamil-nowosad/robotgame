@@ -16,7 +16,10 @@ def towardFilteredOrCurrent(current_loc, dest_loc):
 	if not 'spawn' in rg.loc_types(current_loc):
 		filter_out.append('spawn')
 	
-	goableLocations = [current_loc] + filter(lambda loc: filter(lambda l: l == loc, _game['robots'].keys()) == [], rg.locs_around(current_loc, filter_out))
+	goableLocations = filter(lambda loc: filter(lambda l: l == loc, _game['robots'].keys()) == [], rg.locs_around(current_loc, filter_out))
+	if goableLocations == []:
+		return current_loc
+
 	loc_dist = [{"location": loc, "distance": rg.wdist(loc, dest_loc)} for loc in goableLocations]
 	loc_dist = sorted(loc_dist, key=lambda x: (x["distance"], max(wdist2d(x["location"], dest_loc))))
 	print loc_dist
@@ -38,6 +41,11 @@ def printBasicMove(currentLocation, basicMove):
 
 class Params:
 	HP_RETREAT_THRESHOLD = -1
+
+	RETR_RADIUS_ENEMY = 3
+	RETR_ENEMY_COUNT_THRESHOLD = 2
+	RETR_RADIUS_FRIENDLY = 3
+	RETR_FRIENDLY_COUNT_THRESHOLD = 2 # "self" is counted in
 
 class Move:
 	def __init__(self, move, why):
@@ -61,7 +69,9 @@ class GameView:
 		self.myRobots = filter(lambda (loc, robot): robot['player_id'] == _myPlayerId, _game['robots'].iteritems())
 		self.enemyRobots = filter(lambda (loc, robot): robot.player_id != _myPlayerId, _game['robots'].iteritems())
 		self.locationsOfEnemyRobots = map(lambda x: x[0], self.enemyRobots)
+		self.locationsOfMyRobots = map(lambda x: x[0], self.myRobots)
 		self.enemies = map(lambda (loc, robot): {'location': loc, 'robot': robot, 'numAttacking': 0}, self.enemyRobots)
+
 
 		self.targets = None
 
@@ -118,7 +128,17 @@ def calculateMove(robot):
 		walker = Walker(robot)
 		return walker.goTowards(rg.CENTER_POINT)
 
-	if robot.hp <= Params.HP_RETREAT_THRESHOLD: # retreat turned off
+	def numberOfRobotsInRadius(location, robots, radius):
+		return len(filter(lambda robot: rg.wdist(robot, location) <= radius, robots))
+
+	almostDead = robot.hp <= Params.HP_RETREAT_THRESHOLD 
+	closeEnemies = numberOfRobotsInRadius(robot.location, _gameView.locationsOfEnemyRobots, Params.RETR_RADIUS_ENEMY)
+	closeFriends = numberOfRobotsInRadius(robot.location, _gameView.locationsOfMyRobots, Params.RETR_RADIUS_FRIENDLY)
+	surroundedByEnemies =	(closeEnemies >= Params.RETR_ENEMY_COUNT_THRESHOLD and closeFriends < Params.RETR_FRIENDLY_COUNT_THRESHOLD)
+	shouldRetreat = almostDead or surroundedByEnemies
+
+	if shouldRetreat:
+		print "Will retreat, %s, %s" % (almostDead, surroundedByEnemies)
 		retreater = Retreater(robot)
 		moveOrNone = retreater.tryRetreat()
 		if moveOrNone:
