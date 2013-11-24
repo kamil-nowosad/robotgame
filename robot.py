@@ -2,6 +2,7 @@ import rg
 import random
 import Queue
 import sys
+import copy
 
 class Constants:
 	MIN_HP_GIVEN_BY_ATTACKER = 8
@@ -53,6 +54,8 @@ class Move:
 			return self.move 
 
 class GameView:
+	#(initialGameMap, initialObjMap, initialFeatureToLoc) = (None, None, None)
+
 	def __init__(self, game):
 		self.myRobots = filter(lambda (loc, robot): robot['player_id'] == _myPlayerId, _game['robots'].iteritems())
 		self.enemyRobots = filter(lambda (loc, robot): robot.player_id != _myPlayerId, _game['robots'].iteritems())
@@ -62,33 +65,43 @@ class GameView:
 
 		self.gameMap = None
 		self.objMap = None
+		self.featureToLoc = None
+
+		self.gameMapPerEntireTurn = None
+		self.objMapPerEntireTurn = None
+		self.featureToLocPerEntireTurn = None
 	
 		self.targets = None
 
 	def calculateMap(self):
-		self.gameMap = {}
-		self.objMap = {}
-		for x in range(0, 20):
-			self.gameMap[x] = {}
-			self.objMap[x] = {}
-			for y in range(0, 20):
-				self.gameMap[x][y] = [k for k in rg.loc_types((x, y))]
-				self.objMap[x][y] = {"enemyRobot": None}
+		#self.gameMapPerEntireTurn = copy.deepcopy(GameView.initialGameMap)
+		#self.objMapPerEntireTurn = copy.deepcopy(GameView.initialObjMap)
+		self.gameMapPerEntireTurn = {}
+		self.objMapPerEntireTurn = {}
+		self.featureToLocPerEntireTurn = {}
 
 		for (enemyRobotLoc, enemyRobot) in self.enemyRobots:
 			(x, y) = enemyRobotLoc
-			self.gameMap[x][y].append("enemy_robot")
-			self.gameMap[x][y].append("robot")
+			self.gameMapPerEntireTurn.setdefault(x, {}).setdefault(y, []).append("enemy_robot")
+			self.featureToLocPerEntireTurn.setdefault("enemy_robot", []).append((x, y))
 
-			self.objMap[x][y]["enemyRobot"] = enemyRobot
+			self.objMapPerEntireTurn.setdefault(x, {}).setdefault(y, {})["enemyRobot"] = enemyRobot
 
 			for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-				if "enemy_can_attack" in self.gameMap[x + dx][y + dy]:
-					self.gameMap[x + dx][y + dy].append("2_enemies_can_attack")
+				if "enemy_can_attack" in self.gameMapPerEntireTurn.get(x + dx, {}).get(y + dy, []):
+					self.gameMapPerEntireTurn.setdefault(x + dx, {}).setdefault(y + dy, []).append("2_enemies_can_attack")
+					self.featureToLocPerEntireTurn.setdefault("2_enemies_can_attack", []).append((x + dx, y + dy))
 				else:
-					self.gameMap[x + dx][y + dy].append("enemy_can_attack")
+					self.gameMapPerEntireTurn.setdefault(x + dx, {}).setdefault(y + dy, []).append("enemy_can_attack")
+					self.featureToLocPerEntireTurn.setdefault("enemy_can_attack", []).append((x + dx, y + dy))
 
-	def calculateFriendlyMoves(self):
+	def updateFriendlyMoves(self):
+		#self.gameMap = copy.deepcopy(self.gameMapPerEntireTurn)
+		#self.objMap = copy.deepcopy(self.objMapPerEntireTurn)
+		self.gameMap = {}
+		self.objMap = {}
+		self.featureToLoc = {}
+
 		for moveAndRobot in _movesByOtherRobots:
 			(move, robot) = (moveAndRobot["move"], moveAndRobot["robot"])
 			basicMove = move.getBasicMove()
@@ -98,20 +111,80 @@ class GameView:
 			else:
 				(x, y) = robot.location
 
-			self.gameMap[x][y].append("friendly_robot")
-			self.gameMap[x][y].append("robot")
+			self.gameMap.setdefault(x, {}).setdefault(y, []).append("friendly_robot")
+			self.featureToLoc.setdefault("friendly_robot", []).append((x, y))
 
 			if basicMove[0] == "attack":
 				(x, y) = basicMove[1]
-				self.gameMap[x][y].append("attacked")
+				self.gameMap.setdefault(x, {}).setdefault(y, []).append("attacked")
+				self.featureToLoc.setdefault("attacked", []).append((x, y))
+
+		#locsOfMovedRobots = map(lambda m: m["robot"]["location"], _movesByOtherRobots)
+		#for loc in self.locationsOfMyRobots:
+		#	if loc in locsOfMovedRobots:
+		#		continue
+		#	else:
+		#		(x, y) = loc
+		#		self.gameMap.setdefault(x, {}).setdefault(y, []).append("friendly_robot")
+		#		self.featureToLoc.setdefault("friendly_robot", []).append((x, y))
+				
+
+	def getGameMap(self, x, y):
+		return self.gameMap.get(x, {}).get(y, []) + self.gameMapPerEntireTurn.get(x, {}).get(y, []) + GameView.initialGameMap.get(x, {}).get(y, [])
+	
+	def getObjMap(self, x, y):
+		l = [k for k in self.objMap.get(x, {}).get(y, {}).iteritems()] + [k for k in self.objMapPerEntireTurn.get(x, {}).get(y, {}).iteritems()] + [k for k in GameView.initialObjMap.get(x, {}).get(y, {}).iteritems()]
+		d = dict(l)
+		return d
+
+	@staticmethod
+	def prepareInitialMaps():
+		gameMap = {}
+		objMap = {}
+		featureMap = {}
+		
+		possibleFeatures = [
+			"invalid",
+			"obstacle",
+			"spawn",
+			"normal",
+			"friendly_robot",
+			"enemy_robot",
+			"attacked",
+			"enemy_can_attack",
+			"2_enemies_can_attack"
+		]
+
+		for feature in possibleFeatures:
+			featureMap[feature] = []
+	
+		for x in range(0, 20):
+			gameMap[x] = {}
+			objMap[x] = {}
+			for y in range(0, 20):
+				gameMap[x][y] = []
+				for k in rg.loc_types((x, y)):
+					gameMap[x][y].append(k)
+					featureMap[k].append((x, y))
+				objMap[x][y] = {} #{"enemyRobot": None}
+		for k in range(20):
+			featureMap["invalid"].append((k, -1))
+			featureMap["invalid"].append((k, 20))
+			featureMap["invalid"].append((-1, k))
+			featureMap["invalid"].append((20, k))
+
+		basicForbiddenObstacleInvalid = set(featureMap["invalid"] + featureMap["obstacle"])
+		basicForbiddenObstacleInvalidSpawn = copy.deepcopy(basicForbiddenObstacleInvalid).union(set(featureMap["spawn"]))
+		#print "BasicForbiddenObstacleInvalid: %s" %	basicForbiddenObstacleInvalid
+		return (gameMap, objMap, featureMap, basicForbiddenObstacleInvalid, basicForbiddenObstacleInvalidSpawn)
+
+(GameView.initialGameMap, GameView.initialObjMap, GameView.initialFeatureToLoc, GameView.basicForbiddenObstacleInvalid, GameView.basicForbiddenObstacleInvalidSpawn) = GameView.prepareInitialMaps()
 
 class PathComputer:
-	def __init__(self, fieldsToAvoid = [], avoidMovesOfMorePrivileged = True, avoidPositionsOfOtherRobots = True):
-		self.avoidMovesOfMorePrivileged = avoidMovesOfMorePrivileged
-		self.avoidPositionsOfOtherRobots = avoidPositionsOfOtherRobots
+	def __init__(self, fieldsToAvoid = []):
 		self.filterOut = self.__calculateFilter(fieldsToAvoid)
-		self.filterOutSet = set(self.filterOut)
 		
+		self.basicForbidden = None	
 		self.forbiddenLocations = None
 		self.forbiddenLocationsSet = None
 
@@ -131,32 +204,22 @@ class PathComputer:
 
 	def calcDistanceResult(self, current_loc, dest_loc):
 		dmap = self.__bfs(dest_loc, current_loc)
-		dresult = dmap[current_loc[0]][current_loc[1]]
+		dresult = dmap.get(current_loc[0], {}).get(current_loc[1], {"prev": None, "distance": 9999})
 		return dresult
 
 	def getDistance(self, current_loc, dest_loc):
 		return self.calcDistanceResult(current_loc, dest_loc)["distance"]
 
 	def goTo(self, current_loc, dest_loc):
-		#dr = self.calcDistanceResult(current_loc, dest_loc)
-		dmap = self.__bfs(dest_loc, current_loc)
-		dresult = dmap[current_loc[0]][current_loc[1]]
-
-		loc = dresult["prev"]
-#		if loc:
-#			print "start path from %s to %s" % (str(current_loc), str(dest_loc))
-#			def printRec((x, y)):
-#				if dmap[x][y]["prev"]:
-#					printRec(dmap[x][y]["prev"])
-#				print "%s, %s ->" % (x, y)
-#			printRec(current_loc)
-#			print "end path from %s to %s" % (str(current_loc), str(dest_loc))
-		return loc
+		dr = self.calcDistanceResult(current_loc, dest_loc)
+		return dr["prev"]
 
 	def locationTowards(self, source, target):
 		locs = self.locationsAround(source)
 		if locs:
-			return min((rg.wdist(loc, target), loc) for loc in locs)[1]
+			location = min((rg.wdist(loc, target), loc) for loc in locs)[1]
+			#print "loc: %s, filter: %s, forbidden: %s" % (location, self.filterOut, self.forbiddenLocations)
+			return location
 		else:
 			return None
 			
@@ -166,53 +229,48 @@ class PathComputer:
 		result = []
 		for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
 			(newx, newy) = (x + dx, y + dy)
-			if (newx, newy) in self.forbiddenLocationsSet:	
+			if (newx, newy) in self.forbiddenLocationsSet	or (newx, newy) in self.basicForbidden:
+				#print "loc: %s, %s, %s, %s, %s" % (str((newx, newy)), (newx, newy) in self.forbiddenLocationsSet, (newx, newy) in self.basicForbidden, _gameView.getGameMap(x, y), self.fieldsToAvoid)
 				continue
 			result.append((newx, newy))
 		return result
 	
 	def __calculateFilter(self, fieldsToAvoid):
-		f = ["invalid", "obstacle"]
-		f += fieldsToAvoid
-		if self.avoidMovesOfMorePrivileged:
-			f += ["friendly_robot"]	
-		if self.avoidPositionsOfOtherRobots:
-			f += ["robot"]
-		return f
+		f = []
+		for field in fieldsToAvoid:
+			if field != "spawn":
+				f.append(field)
+		f.append("friendly_robot")
+		f.append("enemy_robot")
 
-	def __isForbidden(self, location):
-		(x, y) = location
-		return set(_gameView.gameMap[x][y]).intersection(self.filterOutSet)
+		return f
 
 	def __calculateForbiddenLocations(self):
 		if self.forbiddenLocations:
 			return
-
+		
+		if "spawn" in self.fieldsToAvoid:
+			self.basicForbidden = _gameView.basicForbiddenObstacleInvalidSpawn
+		else:
+			self.basicForbidden = _gameView.basicForbiddenObstacleInvalid
+			
 		forbidden = []
 
-		for x in range(20):
-			for y in range(20):
-				if self.__isForbidden((x, y)):
-					forbidden.append((x, y))
-	
-		for k in range(20):
-			forbidden.append((k, -1))
-			forbidden.append((k, 20))
-			forbidden.append((-1, k))
-			forbidden.append((20, k))
-	
+		for feature in self.filterOut:
+			#if feature == "friendly_robot":
+				#print "friendly robot: %s" % (_gameView.featureToLoc.get(feature, []) + _gameView.featureToLocPerEntireTurn.get(feature, []))
+			#if feature == "enemy_robot":
+				#print "enemy robot: %s" % (_gameView.featureToLoc.get(feature, []) + _gameView.featureToLocPerEntireTurn.get(feature, []))
+			forbidden += _gameView.featureToLoc.get(feature, []) + _gameView.featureToLocPerEntireTurn.get(feature, [])
+		
 		self.forbiddenLocations = forbidden
 		self.forbiddenLocationsSet = set(forbidden)
 
 	def __bfs(self, source, target):
 		#print "D %s, %s" % (str(source), self.fieldsToAvoid)
-		dmap = {}
-		for x in range(20):
-			dmap[x] = {}
-			for y in range(20):
-				dmap[x][y] = {"prev": None, "distance": 9999}
+		dmap = {} #copy.deepcopy(PathComputer.initialDmap)
 
-		dmap[source[0]][source[1]]["distance"] = 0
+		dmap.setdefault(source[0], {})[source[1]] = {"distance": 0, "prev": None}
 		fifo = Queue.Queue()
 		fifo.put(source)
 			
@@ -222,9 +280,9 @@ class PathComputer:
 
 			dist = dmap[x][y]["distance"]
 			for (newx, newy) in self.locationsAround((x, y)):
-				dest = dmap[newx][newy]
-				if dest["prev"] == None and (newx, newy) != source:
-					dmap[newx][newy] = {"prev": (x, y), "distance": dist + 1}
+				dest = dmap.get(newx, {}).get(newy, None)
+				if dest == None and (newx, newy) != source:
+					dmap.setdefault(newx, {})[newy] = {"prev": (x, y), "distance": dist + 1}
 					if (newx, newy) == target:
 						targetFound = True
 						break
@@ -232,6 +290,14 @@ class PathComputer:
 
 		return dmap
 
+	@staticmethod
+	def calculateInitialObjects():	
+		dmap = {}
+		for x in range(20):
+			dmap[x] = {}
+		return dmap
+
+PathComputer.initialDmap = PathComputer.calculateInitialObjects()
 
 class Walker:
 	def __init__(self, me, pathComputer):
@@ -260,17 +326,17 @@ class Hunter:
 		if not potentialTargets:
 			return None
 		target = min(potentialTargets, key = lambda target: target["dresult"]["distance"])
-		return Move(['move', target["dresult"]["prev"]], "Hunter(hunting a single robot, %s)" % str(target["loc"]))
+		return Move(['move', target["dresult"]["prev"]], "Hunter(hunting a single robot, %s)" % (str(target["loc"])))
 
 	def tryAttackRobotAround(self):
 		for (x, y) in rg.locs_around(self.me.location):
-			if "enemy_robot" in _gameView.gameMap[x][y]:
-				friendsAttacking = _gameView.gameMap[x][y].count("attacked")
-				enemyRobot = _gameView.objMap[x][y]["enemyRobot"]
+			if "enemy_robot" in _gameView.getGameMap(x, y):
+				friendsAttacking = _gameView.getGameMap(x, y).count("attacked")
+				enemyRobot = _gameView.getObjMap(x, y)["enemyRobot"]
 				if friendsAttacking * Constants.MIN_HP_GIVEN_BY_ATTACKER < enemyRobot["hp"]:
 					return Move(['attack', (x, y)], "Hunter [tryAttackRobotAround]")
 				else:
-					print "Not attacking, already attacked by friends: %s, HP: %s" % (_gameView.gameMap[x][y], enemyRobot["hp"])
+					print "Not attacking, already attacked by friends: %s, HP: %s" % (_gameView.getGameMap(x, y), enemyRobot["hp"])
 		return None
 	
 	def tryHunt(self):
@@ -301,18 +367,18 @@ class Retreater:
 	def trySafelyGoingToBestPlace(self): # TODO to center? raczej do najblizszych swoich
 		if rg.wdist(self.me.location, rg.CENTER_POINT) <= 2:
 			return None
-		pc = PathComputer(["spawn", "robot", "enemy_can_attack"])
+		pc = PathComputer(["spawn", "enemy_can_attack"])
 		return pc.goTo(self.me.location, rg.CENTER_POINT)
 	
 	def trySafelyEscaping(self):
-		pc = PathComputer(["spawn", "robot", "enemy_can_attack"])
+		pc = PathComputer(["spawn", "enemy_can_attack"])
 		locAround = pc.locationsAround(self.me.location)
 		if locAround:
 			return locAround[0]
 		return None
 
 	def tryLessSafelyEscaping(self):
-		pc = PathComputer(["spawn", "robot"])
+		pc = PathComputer(["spawn"])
 		locAround = pc.locationsAround(self.me.location)
 		if locAround:
 			return locAround[0]
@@ -401,6 +467,7 @@ class Retreater:
 			isAboutToBeKilledResult = self.isAboutToBeKilled()
 			if isAboutToBeKilledResult[0]:
 				return Move(["suicide"], "Retreater(no option to escape, suicide, %s)!" % isAboutToBeKilledResult[1:])
+			print "%s should retreat, but could not" % (str(self.me.location))
 		
 		catchTheChaserOrNone = self.tryCatchTheChaser()
 		if catchTheChaserOrNone:
@@ -414,23 +481,31 @@ class SpawnEscaper:
 	def tryEscapeSpawnIfApplicable(self):
 		if not ('spawn' in rg.loc_types(self.me.location)):
 			return None # N/A
-
-		walker = Walker(self.me, PathComputer(["robot", "spawn"]))
+		#print "escaping spawn"
+		walker = Walker(self.me, PathComputer(["spawn"]))
 		moveOrNone = walker.tryGoTowards(rg.CENTER_POINT)
 		if moveOrNone:	
 			return Move(moveOrNone, "SpawnEscaper 1")
 
-		walker = Walker(self.me, PathComputer(["robot"]))
+		walker = Walker(self.me, PathComputer([]))
 		moveOrNone = walker.tryGoTowards(rg.CENTER_POINT)
 		if moveOrNone:	
-			print "gameMap: %s" % _gameView.gameMap[moveOrNone.getBasicMove()[1][0]][moveOrNone.getBasicMove()[1][1]]
+			#print "gameMap: %s" % _gameView.getGameMap(moveOrNone.getBasicMove()[1][0], moveOrNone.getBasicMove()[1][1])
 			return Move(moveOrNone, "SpawnEscaper 2")
 
-		pc = PathComputer(["spawn", "robot"])
+		pc = PathComputer(["spawn"])
 		locAround = pc.locationsAround(self.me.location)
 		if locAround:
-			print "gameMap: %s" % _gameView.gameMap[locAround[0][0]][locAround[0][1]]
+			#print "gameMap: %s" % _gameView.getGameMap(locAround[0][0], locAround[0][1])
 			return Move(["move", locAround[0]], "SpawnEscaper 3")
+		
+		pc = PathComputer([])
+		locAround = pc.locationsAround(self.me.location)
+		if locAround:
+			#print "gameMap: %s" % _gameView.getGameMap(locAround[0][0], locAround[0][1])
+			return Move(["move", locAround[0]], "SpawnEscaper 4")
+
+		#print "could not escape spawn"
 		return None		
 
 class Robot:
@@ -455,7 +530,10 @@ class Robot:
 		for (loc, robot) in myRobotsSortedDescByPrivilege:
 			if loc == self.location:
 				break
-			_movesByOtherRobots.append({"robot": robot, "move": Robot.calculateMove(InternalRobot(robot["location"], robot["hp"]))})
+			if rg.wdist(loc, self.location) <= 3:	
+				move = Robot.calculateMove(InternalRobot(robot["location"], robot["hp"]))
+				#print "calculating move of robot at %s, move: %s" % (str(loc), move.getBasicMove())
+				_movesByOtherRobots.append({"robot": robot, "move": move})
 
 	def act(self, game):
 		global _game
@@ -467,7 +545,7 @@ class Robot:
 		_gameView = GameView(game)
 		_gameView.calculateMap()
 
-		self.estimateMovesOfOtherRobots()
+		self.estimateMovesOfOtherRobots() # TODO ograniczyc do najblizszego otoczenia
 
 		move = Robot.calculateMove(self)
 
@@ -479,8 +557,7 @@ class Robot:
 
 	@staticmethod
 	def calculateMove(robot):
-		_gameView.calculateMap() # split ma buga - dopisuje "attacked" i "robot" tam gdzie nie trzeba
-		_gameView.calculateFriendlyMoves()
+		_gameView.updateFriendlyMoves()
 
 		spawnEscaper = SpawnEscaper(robot)
 		moveOrNone = spawnEscaper.tryEscapeSpawnIfApplicable()
